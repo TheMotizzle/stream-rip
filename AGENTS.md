@@ -11,19 +11,19 @@ Single-file Python tool: extracts the video stream URL (`m3u8`/`mpd`/`mp4`/...) 
 ```bash
 pip install requests beautifulsoup4
 
-python3 streamrip.py <page-url>          # print the best stream URL
-python3 streamrip.py <page-url> --play   # play the best stream in VLC
-python3 streamrip.py <m3u8-url>  --play  # play a raw stream URL directly
+python3 streamrip.py <page-url>            # print the best stream URL
+python3 streamrip.py <page-url> --vlc      # play the best stream in VLC
+python3 streamrip.py <m3u8-url>  --vlc     # play a raw stream URL directly
 ```
 
-VLC is only needed for `--play`. Full install/usage guide is in `--help`.
+VLC is only needed for `--vlc`. Full install/usage guide is in `--help`.
 
 ## How it works
 
 1. **Crawl** — BFS over a queue of `[url, referer, base, kind, depth]` where `kind` is `doc` or `script`. Follows `<iframe src>` and `<script src>`; inline `<script>` text is scanned in place. Depth (`--depth`) and a fetch cap (`--max-fetches`) bound the crawl.
 2. **Collect** — Media URLs are matched by extension (`MEDIA_EXT_RE`: `m3u8, mpd, mp4, m4v, mkv, webm, mov, avi, flv, ts, ogv, ogg`) found in (a) `<video>/<source src>`, (b) quoted URLs in raw HTML, and (c) quoted / `src:` URLs inside script text. Non-media `src:` URLs in scripts are treated as iframes built via `document.write` and enqueued as new docs owned by the enclosing page.
 3. **Score & pick best** — `m3u8`=100, `mpd`=90, common video exts=50, `ts`=10; **+8 per context keyword** (`source`, `player`, `file`, `hls`, `m3u8`, `stream`, `clappr`). `best()` returns the highest-scoring entry.
-4. **Play (`--play`)** — Fronts the stream with a local reverse proxy (`LocalProxy` on `127.0.0.1:<port>`) that injects the required `Referer` + `User-Agent`, then launches VLC against the local URL.
+4. **Play (`--vlc`)** — Fronts the stream with a local reverse proxy (`LocalProxy` on `127.0.0.1:<port>`) that injects the required `Referer` + `User-Agent`, then launches VLC against the local URL.
 
 ## Why it's built this way (non-obvious gotchas)
 
@@ -42,8 +42,8 @@ VLC is only needed for `--play`. Full install/usage guide is in `--help`.
 | `--chain` | Show the navigation chain that led to the stream |
 | `--json` | Machine-readable output |
 | `-q` / `--quiet` | Print only the stream URL |
-| `--play` | Play the best stream in VLC via the local proxy |
-| `--no-gui` | With `--play`, use `cvlc` (no window) |
+| `--vlc` | Play the best stream in VLC via the local proxy |
+| `--no-gui` | With `--vlc`, use `cvlc` (no window) |
 | `--vlc-bin PATH` | Specific VLC binary (else auto-detected) |
 | `--vlc-args "..."` | Extra arguments passed to VLC |
 | `--depth N` | Max iframe depth (default 10) |
@@ -71,7 +71,7 @@ Navigation chain: `vipboxi.net` → `dungatv.xyz/dunga43.php` → `aquaaqua.top/
 Verify playback headlessly:
 
 ```bash
-python3 streamrip.py "https://www.cdn291.info/images/dunga43/index.m3u8" --play --no-gui
+python3 streamrip.py "https://www.cdn291.info/images/dunga43/index.m3u8" --vlc --no-gui
 ```
 
 ## Notes for editing

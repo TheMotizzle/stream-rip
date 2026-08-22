@@ -39,28 +39,28 @@ DEFAULT_UA = (
 USAGE_GUIDE = """
 HOW TO RUN / INSTALL (all platforms)
   Requirements: Python 3.8+, the `requests` and `beautifulsoup4` packages.
-  VLC is only needed when using --play.
+  VLC is only needed when using --vlc.
 
   1) Install the Python dependencies (any platform):
          pip install requests beautifulsoup4
      (if pip is missing or protected, try:  pip3 install --user ...)
 
-  2) Install VLC (only for --play):
+  2) Install VLC (only for --vlc):
          Linux   :  sudo apt install vlc      (or: dnf install / pacman -S vlc)
          macOS   :  brew install vlc          (or download from videolan.org)
          Windows :  Install the standard build from videolan.org
 
   3) Run it:
          streamrip.py <page-url>               print the best stream URL
-         streamrip.py <page-url> --play        play the stream in VLC
-         streamrip.py <m3u8-url>  --play       play a raw stream URL directly
+         streamrip.py <page-url>  --vlc  play the stream in VLC
+         streamrip.py <m3u8-url>  --vlc  play a raw stream URL directly
      (If `streamrip.py` isn't executable, run it as:  python streamrip.py ...)
 
   Useful options:
          --all      show every candidate stream URL, not just the best
          --chain    show the navigation chain that led to the stream
          --json     machine-readable output
-         --no-gui   with --play, use cvlc (no video window)
+         --no-gui   with --vlc, use cvlc (no video window)
          --vlc-bin  point at a VLC binary if auto-detection misses it
 
   VLC auto-detection order (used when --vlc-bin is not given):
@@ -460,16 +460,16 @@ def main():
     ap.add_argument("--ua", default=DEFAULT_UA, help="User-Agent string")
     ap.add_argument("-q", "--quiet", action="store_true",
                     help="Print only the stream URL (no labels)")
-    ap.add_argument("--play", action="store_true",
+    ap.add_argument("--vlc", action="store_true",
                     help="Play the best stream in VLC (via a local proxy that "
                          "injects the required Referer / User-Agent)")
     ap.add_argument("--no-gui", action="store_true",
-                    help="With --play, use cvlc (no GUI window)")
+                    help="With --vlc, use cvlc (no GUI window)")
     ap.add_argument("--vlc-bin", default=None,
-                    help="VLC executable for --play (default: auto-detect "
+                    help="VLC executable for --vlc (default: auto-detect "
                          "vlc/cvlc on PATH or a known install location)")
     ap.add_argument("--vlc-args", default="",
-                    help="Extra arguments to pass to VLC with --play")
+                    help="Extra arguments to pass to VLC with --vlc")
     args = ap.parse_args()
 
     # Windows consoles may use a non-UTF-8 codepage; make sure printing never
@@ -516,7 +516,7 @@ def main():
             print("  %d. %s" % (i, step), file=sys.stderr)
         print("", file=sys.stderr)
 
-    if args.play:
+    if args.vlc:
         play_with_vlc(ripper, best, args)
         return
 

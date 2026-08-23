@@ -1,29 +1,30 @@
 # streamrip
 
-Single-file Python tool: extracts the video stream URL (`m3u8`/`mpd`/`mp4`/...) from a streaming page and optionally plays it in VLC.
+Single-file Python tool: extracts the video stream URL (`m3u8`/`mpd`/`mp4`/...) from a streaming page and plays it in VLC by default.
 
 - **File:** `streamrip.py` (self-contained, no build step)
 - **Repo:** https://github.com/TheMotizzle/stream-rip (branch `main`)
-- **Local path:** `/home/x/projects/stream-rip`
+- **Local path:** `/Users/matt/projects/stream-rip`
 
 ## Quick start
 
 ```bash
-pip install requests beautifulsoup4
-
-python3 streamrip.py <page-url>            # print the best stream URL
-python3 streamrip.py <page-url> --vlc      # play the best stream in VLC
-python3 streamrip.py <m3u8-url>  --vlc     # play a raw stream URL directly
+./streamrip.py "<page-url>"                # find and play the best stream
+./streamrip.py "<m3u8-url>"                # play a raw stream URL directly
+./streamrip.py "<page-url>" --no-vlc       # print the best URL without VLC
 ```
 
-VLC is only needed for `--vlc`. Full install/usage guide is in `--help`.
+Python setup is automatic. If `.venv` exists beside the script, `streamrip.py` re-executes itself with that environment. If `requests` or `beautifulsoup4` is missing, it prompts before creating `.venv` (recommended) and installing both packages. An already-active virtual environment takes precedence, and missing packages are offered for installation there. On Apple Python builds that use LibreSSL, bootstrap installs `urllib3<2` to avoid urllib3 2.x compatibility warnings.
+
+VLC is the default behavior. Use `--no-vlc`, `--all`, `--json`, or `--quiet` for reporting without playback. The old `--vlc` flag remains accepted as a hidden backward-compatible no-op. Full install/usage guidance is in `--help`.
 
 ## How it works
 
-1. **Crawl** — BFS over a queue of `[url, referer, base, kind, depth]` where `kind` is `doc` or `script`. Follows `<iframe src>` and `<script src>`; inline `<script>` text is scanned in place. Depth (`--depth`) and a fetch cap (`--max-fetches`) bound the crawl.
-2. **Collect** — Media URLs are matched by extension (`MEDIA_EXT_RE`: `m3u8, mpd, mp4, m4v, mkv, webm, mov, avi, flv, ts, ogv, ogg`) found in (a) `<video>/<source src>`, (b) quoted URLs in raw HTML, and (c) quoted / `src:` URLs inside script text. Non-media `src:` URLs in scripts are treated as iframes built via `document.write` and enqueued as new docs owned by the enclosing page.
-3. **Score & pick best** — `m3u8`=100, `mpd`=90, common video exts=50, `ts`=10; **+8 per context keyword** (`source`, `player`, `file`, `hls`, `m3u8`, `stream`, `clappr`). `best()` returns the highest-scoring entry.
-4. **Play (`--vlc`)** — Fronts the stream with a local reverse proxy (`LocalProxy` on `127.0.0.1:<port>`) that injects the required `Referer` + `User-Agent`, then launches VLC against the local URL.
+1. **Bootstrap** — Before importing third-party packages, detects the active/project virtual environment and prompts to install anything missing. It cannot activate a venv in the parent shell, so it re-executes the current command with the venv's Python instead.
+2. **Crawl** — BFS over a queue of `[url, referer, base, kind, depth]` where `kind` is `doc` or `script`. Follows `<iframe src>` and `<script src>`; inline `<script>` text is scanned in place. Depth (`--depth`) and a fetch cap (`--max-fetches`) bound the crawl.
+3. **Collect** — Media URLs are matched by extension (`MEDIA_EXT_RE`: `m3u8, mpd, mp4, m4v, mkv, webm, mov, avi, flv, ts, ogv, ogg`) found in (a) `<video>/<source src>`, (b) quoted URLs in raw HTML, and (c) quoted / `src:` URLs inside script text. Non-media `src:` URLs in scripts are treated as iframes built via `document.write` and enqueued as new docs owned by the enclosing page.
+4. **Score & pick best** — `m3u8`=100, `mpd`=90, common video exts=50, `ts`=10; **+8 per context keyword** (`source`, `player`, `file`, `hls`, `m3u8`, `stream`, `clappr`). `best()` returns the highest-scoring entry.
+5. **Play (default)** — Fronts the stream with a local reverse proxy (`LocalProxy` on `127.0.0.1:<port>`) that injects the required `Referer` + `User-Agent`, then launches VLC against the local URL.
 
 ## Why it's built this way (non-obvious gotchas)
 
@@ -42,8 +43,8 @@ VLC is only needed for `--vlc`. Full install/usage guide is in `--help`.
 | `--chain` | Show the navigation chain that led to the stream |
 | `--json` | Machine-readable output |
 | `-q` / `--quiet` | Print only the stream URL |
-| `--vlc` | Play the best stream in VLC via the local proxy |
-| `--no-gui` | With `--vlc`, use `cvlc` (no window) |
+| `--no-vlc` | Print the best stream URL instead of launching VLC |
+| `--no-gui` | Use `cvlc` (no window) |
 | `--vlc-bin PATH` | Specific VLC binary (else auto-detected) |
 | `--vlc-args "..."` | Extra arguments passed to VLC |
 | `--depth N` | Max iframe depth (default 10) |
@@ -62,7 +63,7 @@ VLC is only needed for `--vlc`. Full install/usage guide is in `--help`.
 Known-good example (a live-game page; the exact URL and stream may expire over time, and DNS in some sandboxes is flaky — retry on `NameResolutionError`):
 
 ```bash
-python3 streamrip.py "https://vipboxi.net/football/notch-248aa1-denver-broncos-green-bay-packers?l=2891632059"
+python3 streamrip.py "https://vipboxi.net/football/notch-248aa1-denver-broncos-green-bay-packers?l=2891632059" --no-vlc
 # -> https://www.cdn291.info/images/dunga43/index.m3u8
 ```
 
@@ -71,11 +72,12 @@ Navigation chain: `vipboxi.net` → `dungatv.xyz/dunga43.php` → `aquaaqua.top/
 Verify playback headlessly:
 
 ```bash
-python3 streamrip.py "https://www.cdn291.info/images/dunga43/index.m3u8" --vlc --no-gui
+python3 streamrip.py "https://www.cdn291.info/images/dunga43/index.m3u8" --no-gui
 ```
 
 ## Notes for editing
 
 - Keep it a **single self-contained file** using only the stdlib + `requests` + `beautifulsoup4`.
+- Keep environment bootstrapping above the third-party imports so a fresh machine can reach the install prompt.
 - Detection and scoring are **heuristic** — prefer improving `score()` / `MEDIA_EXT_RE` / the regexes over adding per-site special cases.
 - The `--help` epilog (`USAGE_GUIDE`) documents install/usage — keep it in sync if flags or platforms change.

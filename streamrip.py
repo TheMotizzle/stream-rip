@@ -4,8 +4,8 @@ streamrip - extract the video stream link (m3u8/mp4/mpd/...) from a streaming pa
 
 Fetches a page, then recursively follows nested <iframe>s and JavaScript
 (including scripts that build iframes via document.write), collecting every
-media-source URL it can find. By default it prints the single most-likely
-stream URL; use --all / --chain / --json for more detail.
+media-source URL it can find. By default it plays the most-likely stream in
+VLC; use --no-vlc / --all / --chain / --json for other output modes.
 
 Usage:
     python3 streamrip.py <url>
@@ -15,11 +15,13 @@ Usage:
 
 import argparse
 import http.server
+import importlib.util
 import json
 import os
 import re
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -27,8 +29,110 @@ import urllib.error
 import urllib.request
 from urllib.parse import urljoin, urlparse
 
-import requests
-from bs4 import BeautifulSoup
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+VENV_DIR = os.path.join(SCRIPT_DIR, ".venv")
+REQUIRED_PACKAGES = {
+    "requests": "requests",
+    "bs4": "beautifulsoup4",
+}
+
+
+def in_virtualenv():
+    return (getattr(sys, "base_prefix", sys.prefix) != sys.prefix or
+            hasattr(sys, "real_prefix"))
+
+
+def venv_python(venv_dir):
+    if os.name == "nt":
+        return os.path.join(venv_dir, "Scripts", "python.exe")
+    return os.path.join(venv_dir, "bin", "python")
+
+
+def restart_with(python):
+    print("Restarting with virtual environment: %s" %
+          os.path.dirname(os.path.dirname(python)), file=sys.stderr)
+    os.execv(python, [python, os.path.abspath(__file__)] + sys.argv[1:])
+
+
+def confirm(question):
+    if not sys.stdin.isatty():
+        return False
+    try:
+        answer = input(question + " [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("", file=sys.stderr)
+        return False
+    return answer in ("", "y", "yes")
+
+
+def install_packages(python, packages):
+    requirements = list(packages)
+    # Apple-provided Python 3.9 uses LibreSSL. urllib3 2.x warns that it only
+    # supports OpenSSL 1.1.1+, so keep urllib3 1.x in environments created from
+    # that interpreter. A modern Homebrew/python.org Python needs no pin.
+    if "LibreSSL" in ssl.OPENSSL_VERSION and "urllib3<2" not in requirements:
+        requirements.append("urllib3<2")
+    print("Installing %s..." % ", ".join(requirements), file=sys.stderr)
+    try:
+        subprocess.check_call(
+            [python, "-m", "pip", "install"] + requirements)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print("Dependency installation failed: %s" % exc, file=sys.stderr)
+        sys.exit(2)
+
+
+def ensure_python_environment():
+    """Use a project venv and offer to install missing dependencies."""
+    project_python = venv_python(VENV_DIR)
+
+    # A checked-in project should consistently reuse its local environment.
+    # An already-active environment takes precedence so callers can choose one.
+    if not in_virtualenv() and os.path.isfile(project_python):
+        restart_with(project_python)
+
+    missing = [package for module, package in REQUIRED_PACKAGES.items()
+               if importlib.util.find_spec(module) is None]
+    if not missing:
+        return
+
+    missing_text = ", ".join(missing)
+    if in_virtualenv():
+        question = ("Missing required Python package(s): %s. Install them "
+                    "in the active virtual environment?" % missing_text)
+        if not confirm(question):
+            print("Install them with: %s -m pip install %s" %
+                  (sys.executable, " ".join(missing)), file=sys.stderr)
+            sys.exit(2)
+        install_packages(sys.executable, missing)
+        return
+
+    question = ("Missing required Python package(s): %s. Create %s and "
+                "install them there (recommended)?" %
+                (missing_text, VENV_DIR))
+    if not confirm(question):
+        print("To set it up manually, run:", file=sys.stderr)
+        print("  %s -m venv %s" % (sys.executable, VENV_DIR),
+              file=sys.stderr)
+        print("  %s -m pip install %s" %
+              (venv_python(VENV_DIR), " ".join(missing)), file=sys.stderr)
+        sys.exit(2)
+
+    print("Creating virtual environment: %s" % VENV_DIR, file=sys.stderr)
+    try:
+        subprocess.check_call([sys.executable, "-m", "venv", VENV_DIR])
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print("Could not create the virtual environment: %s" % exc,
+              file=sys.stderr)
+        sys.exit(2)
+    install_packages(project_python, list(REQUIRED_PACKAGES.values()))
+    restart_with(project_python)
+
+
+ensure_python_environment()
+
+import requests  # noqa: E402  (loaded after dependency bootstrap)
+from bs4 import BeautifulSoup  # noqa: E402
 
 DEFAULT_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -38,32 +142,35 @@ DEFAULT_UA = (
 # Cross-platform install / usage guide shown by --help.
 USAGE_GUIDE = """
 HOW TO RUN / INSTALL (all platforms)
-  Requirements: Python 3.8+, the `requests` and `beautifulsoup4` packages.
-  VLC is only needed when using --vlc.
+  Requirements: Python 3.8+ and VLC.
 
-  1) Install the Python dependencies (any platform):
-         pip install requests beautifulsoup4
-     (if pip is missing or protected, try:  pip3 install --user ...)
+  Python environment setup is automatic:
+     - If .venv already exists beside this script, it is used automatically.
+     - If requests or beautifulsoup4 is missing, streamrip offers to create
+       .venv and install both dependencies there (recommended).
+     - If another virtual environment is active, streamrip offers to install
+       missing dependencies into that environment instead.
 
-  2) Install VLC (only for --vlc):
+  Install VLC:
          Linux   :  sudo apt install vlc      (or: dnf install / pacman -S vlc)
          macOS   :  brew install vlc          (or download from videolan.org)
          Windows :  Install the standard build from videolan.org
 
-  3) Run it:
-         streamrip.py <page-url>               print the best stream URL
-         streamrip.py <page-url>  --vlc  play the stream in VLC
-         streamrip.py <m3u8-url>  --vlc  play a raw stream URL directly
+  Run it (VLC launches by default):
+         streamrip.py <page-url>       find and play the best stream
+         streamrip.py <m3u8-url>       play a raw stream URL directly
+         streamrip.py <url> --no-vlc   print the best URL without playing it
      (If `streamrip.py` isn't executable, run it as:  python streamrip.py ...)
 
   Useful options:
          --all      show every candidate stream URL, not just the best
          --chain    show the navigation chain that led to the stream
          --json     machine-readable output
-         --no-gui   with --vlc, use cvlc (no video window)
+         --no-vlc   print the best stream URL instead of launching VLC
+         --no-gui   use cvlc (no video window)
          --vlc-bin  point at a VLC binary if auto-detection misses it
 
-  VLC auto-detection order (used when --vlc-bin is not given):
+  VLC auto-detection order (when --vlc-bin is not given):
          1. vlc / cvlc found on PATH
          2. macOS   : /Applications/VLC.app/Contents/MacOS/VLC
          3. Windows : C:\\Program Files[ (x86)]\\VideoLAN\\VLC\\vlc.exe
@@ -400,11 +507,6 @@ def play_with_vlc(ripper, best, args):
         referer = "%s://%s" % (p.scheme, p.netloc)
     real_base = urljoin(stream_url, "./")
 
-    proxy = LocalProxy(real_base, referer, args.ua)
-    local_base = proxy.start()
-    filename = stream_url.rstrip("/").split("/")[-1]
-    local_url = "%s/%s" % (local_base, filename)
-
     if args.vlc_bin:
         vlc_bin = args.vlc_bin
     else:
@@ -415,6 +517,11 @@ def play_with_vlc(ripper, best, args):
                   "or C:\\Program Files\\VideoLAN\\VLC\\vlc.exe on Windows).",
                   file=sys.stderr)
             return
+
+    proxy = LocalProxy(real_base, referer, args.ua)
+    local_base = proxy.start()
+    filename = stream_url.rstrip("/").split("/")[-1]
+    local_url = "%s/%s" % (local_base, filename)
     cmd = [vlc_bin, "--network-caching=2000"]
     if args.vlc_args:
         cmd += shlex.split(args.vlc_args)
@@ -442,8 +549,8 @@ def play_with_vlc(ripper, best, args):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Extract the video stream link from a streaming page, "
-                    "optionally playing it in VLC.",
+        description="Extract the video stream link from a streaming page "
+                    "and play it in VLC by default.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=USAGE_GUIDE)
     ap.add_argument("url", help="Page URL to rip the stream from")
@@ -460,16 +567,18 @@ def main():
     ap.add_argument("--ua", default=DEFAULT_UA, help="User-Agent string")
     ap.add_argument("-q", "--quiet", action="store_true",
                     help="Print only the stream URL (no labels)")
-    ap.add_argument("--vlc", action="store_true",
-                    help="Play the best stream in VLC (via a local proxy that "
-                         "injects the required Referer / User-Agent)")
+    ap.add_argument("--no-vlc", action="store_true",
+                    help="Print the best stream URL instead of launching VLC")
+    # Retain the old flag so existing commands keep working. VLC is now the
+    # default, so the flag has no effect and is hidden from --help.
+    ap.add_argument("--vlc", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--no-gui", action="store_true",
-                    help="With --vlc, use cvlc (no GUI window)")
+                    help="Use cvlc (no GUI window)")
     ap.add_argument("--vlc-bin", default=None,
-                    help="VLC executable for --vlc (default: auto-detect "
+                    help="VLC executable (default: auto-detect "
                          "vlc/cvlc on PATH or a known install location)")
     ap.add_argument("--vlc-args", default="",
-                    help="Extra arguments to pass to VLC with --vlc")
+                    help="Extra arguments to pass to VLC")
     args = ap.parse_args()
 
     # Windows consoles may use a non-UTF-8 codepage; make sure printing never
@@ -516,17 +625,18 @@ def main():
             print("  %d. %s" % (i, step), file=sys.stderr)
         print("", file=sys.stderr)
 
-    if args.vlc:
-        play_with_vlc(ripper, best, args)
-        return
-
     if args.all:
         for entry in sorted(ripper.media.values(),
                             key=lambda e: -ripper.score(e)):
             print("[%4d] (%s) %s" % (ripper.score(entry), entry["ext"],
                                      entry["url"]))
-    else:
+        return
+
+    if args.no_vlc or args.quiet:
         print(best["url"])
+        return
+
+    play_with_vlc(ripper, best, args)
 
 
 if __name__ == "__main__":

@@ -496,6 +496,33 @@ def find_vlc(prefer_console=False):
     return None
 
 
+def preflight_stream(local_url, stream_url, timeout=20):
+    """Fetch the stream through the local proxy before launching VLC so
+    upstream failures (usually HTTP 404 when a live broadcast has not
+    started or has ended) surface as a readable warning."""
+    try:
+        req = urllib.request.Request(local_url)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read(4096)
+    except urllib.error.HTTPError as exc:
+        hints = {
+            404: ("the stream file does not exist (yet) - for live events this "
+                  "usually means the broadcast has not started or has ended"),
+            403: "the stream server rejected the request (access restricted)",
+            503: "the stream server is not serving this stream right now",
+        }
+        print("Warning: upstream returned HTTP %d for %s" %
+              (exc.code, stream_url), file=sys.stderr)
+        print("  %s." %
+              hints.get(exc.code, "the stream is not available right now"),
+              file=sys.stderr)
+        print("  Launching the player anyway; it will show the same error.",
+              file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print("Warning: preflight stream check failed: %s" % exc,
+              file=sys.stderr)
+
+
 def play_with_vlc(ripper, best, args):
     stream_url = best["url"]
     # The Referer a real browser would send is the player page that embedded
@@ -522,6 +549,7 @@ def play_with_vlc(ripper, best, args):
     local_base = proxy.start()
     filename = stream_url.rstrip("/").split("/")[-1]
     local_url = "%s/%s" % (local_base, filename)
+    preflight_stream(local_url, stream_url)
     cmd = [vlc_bin, "--network-caching=2000"]
     if args.vlc_args:
         cmd += shlex.split(args.vlc_args)
